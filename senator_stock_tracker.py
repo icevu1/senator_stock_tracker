@@ -2,6 +2,7 @@ import time
 import requests
 import base64
 import os
+from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -12,9 +13,11 @@ from email.message import EmailMessage
 URL = "https://www.capitoltrades.com/trades"
 WATCH_INTERVAL = 60  # in seconds
 
+load_dotenv()
+
 # Email settings
-TO_EMAIL = "icevu.stock.tracker@gmail.com"
-CLIENT_SECRET_FILE = 'C:\\Users\\Danik\\Desktop\\projectVSC\\python\\senator_stock_tracker\\client_secret_686272783415-caviqinkvvi5dj3drjghmd925galm06a.apps.googleusercontent.com.json'
+TO_EMAIL = os.getenv("TO_EMAIL")
+CLIENT_SECRET_FILE = os.getenv("CLIENT_SECRET_FILE")
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
