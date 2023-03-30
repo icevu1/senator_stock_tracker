@@ -2,6 +2,7 @@ import time
 import requests
 import base64
 import os
+import json
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
@@ -21,6 +22,15 @@ CLIENT_SECRET_FILE = os.getenv("CLIENT_SECRET_FILE")
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
+def save_previous_trades(trades, file_path='previous_trades.json'):
+    with open(file_path, 'w') as f:
+        json.dump(trades, f)
+
+def load_previous_trades(file_path='previous_trades.json'):
+    if not os.path.exists(file_path):
+        return []
+    with open(file_path, 'r') as f:
+        return json.load(f)
 
 def fetch_data(url):
     response = requests.get(url)
@@ -30,40 +40,52 @@ def fetch_data(url):
         print("Error fetching data from the website")
         return None
 
-def parse_newest_trade(html):
+def parse_trades(html):
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("tbody")
-    newest_row = table.find("tr")
+    rows = table.find_all("tr")
 
-    trade_size = newest_row.find("span", class_="q-field trade-size")
-    trade_price = newest_row.find("span", class_="q-field trade-price")
-    politician_name = newest_row.find("h3", class_="q-fieldset politician-name").find("a")
-    issuer_name = newest_row.find("h3", class_="q-fieldset issuer-name").find("a")
-    def is_trade_type(tag):
-        return tag.has_attr("class") and "q-field" in tag["class"] and "tx-type" in tag["class"]
+    trades = []
 
-    trade_type = newest_row.find_all(is_trade_type)[0]
+    for row in rows:
+        trade_size = row.find("span", class_="q-field trade-size")
+        trade_price = row.find("span", class_="q-field trade-price")
+        politician_name = row.find("h3", class_="q-fieldset politician-name").find("a")
+        issuer_name = row.find("h3", class_="q-fieldset issuer-name").find("a")
 
-    if "tx-type--buy" in trade_type["class"]:
-        trade_type_text = "Buy"
-    else:
-        trade_type_text = "Sell"
+        if not all([trade_size, trade_price, politician_name, issuer_name]):
+            continue
 
+        def is_trade_type(tag):
+            return tag.has_attr("class") and "q-field" in tag["class"] and "tx-type" in tag["class"]
 
-    #trade = (politician_name.text, issuer_name.text, trade_size.text, trade_price.text,  trade_type_text)
-    trade = (
-        politician_name.text if politician_name else "",
-        issuer_name.text if issuer_name else "",
-        trade_size.text if trade_size else "",
-        trade_price.text if trade_price else "",
-        trade_type_text if trade_type else "")
-    return trade
+        trade_type = row.find_all(is_trade_type)[0]
+
+        if "tx-type--buy" in trade_type["class"]:
+            trade_type_text = "Buy"
+        else:
+            trade_type_text = "Sell"
+
+        trade_id = f"{politician_name.text}-{issuer_name.text}-{trade_size.text}-{trade_price.text}-{trade_type_text}"
+        trade = {
+            "id": trade_id,
+            "politician_name": politician_name.text,
+            "issuer_name": issuer_name.text,
+            "trade_size": trade_size.text,
+            "trade_price": trade_price.text,
+            "trade_type": trade_type_text,
+        }
+
+        trades.append(trade)
+
+    return trades
+
 
 def send_email(credentials, trade):
     msg = EmailMessage()
-    msg.set_content(f"Senator's name: {trade[0]}\nIssuer: {trade[1]}\nTrade size: {trade[2]}$\nPrice: {trade[3]}$/Share \nType: {trade[4]}")
+    msg.set_content(f"Senator's name: {trade['politician_name']}\nIssuer: {trade['issuer_name']}\nTrade size: {trade['trade_size']}$\nPrice: {trade['trade_price']}$\nType: {trade['trade_type']}")
 
-    msg["Subject"] = f"New Trade Alert: {trade[0]} | {trade[1]} | {trade[4].capitalize()} | Size: {trade[2]} | Price: {trade[3]}"
+    msg["Subject"] = f"New Trade Alert: {trade['politician_name']} | {trade['issuer_name']} | {trade['trade_type'].capitalize()} | Size: {trade['trade_size']} | Price: {trade['trade_price']}"
 
     msg["To"] = TO_EMAIL
 
@@ -71,6 +93,7 @@ def send_email(credentials, trade):
 
     service = build("gmail", "v1", credentials=credentials)
     service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
+
 
 def get_credentials():
     SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
@@ -90,19 +113,35 @@ def get_credentials():
     return creds
 
 def monitor_trades():
-    previous_trade = None
     credentials = get_credentials()
+
+    previous_trades_file = "previous_trades.json"
+    previous_trades = load_previous_trades(previous_trades_file)
+
+    if previous_trades:
+        last_trade_id = previous_trades[0]["id"]
+    else:
+        last_trade_id = None
 
     while True:
         html = fetch_data(URL)
         if html:
-            current_trade = parse_newest_trade(html)
+            current_trades = parse_trades(html)
 
-            if previous_trade != current_trade:
-                print(f"New trade added: Senator's name: {current_trade[0]} Issuer: {current_trade[1]} Trade size: {current_trade[2]} Price: {current_trade[3]} Type: {current_trade[4]}")
-                send_email(credentials, current_trade)
+            new_trades = []
+            for trade in current_trades:
+                if trade["id"] == last_trade_id:
+                    break
+                new_trades.append(trade)
 
-            previous_trade = current_trade
+            if new_trades:
+                last_trade_id = new_trades[0]["id"]
+                previous_trades = new_trades + previous_trades
+                save_previous_trades(previous_trades, previous_trades_file)
+
+                for trade in reversed(new_trades):
+                    print(f"New trade added: {trade}")
+                    send_email(credentials, trade)
 
         time.sleep(WATCH_INTERVAL)
 
